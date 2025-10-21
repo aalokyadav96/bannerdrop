@@ -122,9 +122,9 @@ func CreatePoster(videoPath, posterPath string) error {
 		return fmt.Errorf("failed to create poster directory for %s: %w", posterPath, err)
 	}
 
-	// Ensure .jpg exactly once
+	// Ensure .png exactly once
 	base := strings.TrimSuffix(posterPath, filepath.Ext(posterPath))
-	posterJPG := filepath.ToSlash(base + ".jpg")
+	posterJPG := filepath.ToSlash(base + ".png")
 	log.Println("CreatePoster:", videoPath, "->", posterJPG)
 
 	duration, err := getVideoDuration(videoPath)

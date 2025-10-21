@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -164,10 +165,9 @@ func isExtensionAllowed(ext string, picType PictureType) bool {
 	allowed := AllowedExtensions[picType]
 	log.Println("[picType]", picType)
 	log.Println("[allowed]", allowed)
-	for _, a := range allowed {
-		if ext == a {
-			return true
-		}
+	log.Println("[ext]", ext)
+	if ext == "" || slices.Contains(allowed, ext) {
+		return true
 	}
 	log.Println("[isExtensionAllowed]->")
 	return false

@@ -77,30 +77,77 @@ func processUploadedFiles(r *http.Request) ([]Attachment, error) {
 
 // processSingleFile handles individual file based on type
 func processSingleFile(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
-	if key == "feed" && postType == "video" || postType == "audio" {
-		log.Println("I was here")
-		return handleFeedMediaUpload(r, fh, key)
+	if key == "feed" {
+		// When key == feed, we still check postType (default to "video" if missing)
+		if postType == "" {
+			postType = "video"
+			log.Printf("[Filedrop] postType missing for feed, defaulting to %q", postType)
+		}
+		if postType == "video" || postType == "audio" {
+			return handleFeedMediaUpload(r, fh, key)
+		}
 	}
 	// For all other keys, we ignore postType entirely
 	return handleRegularUpload(fh, key, postType)
 }
 
-// // processSingleFile handles individual file based on type
-// func processSingleFile(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
-// 	if key == "feed" {
-// 		// When key == feed, we still check postType (default to "video" if missing)
-// 		if postType == "" {
-// 			postType = "video"
-// 			log.Printf("[Filedrop] postType missing for feed, defaulting to %q", postType)
-// 		}
-// 		if postType == "poster" {
-// 			return handleRegularUpload(fh, key, postType)
-// 		}
-// 		if postType == "video" || postType == "audio" {
-// 			return handleFeedMediaUpload(r, fh, key)
+// // FiledropHandler handles file uploads via multipart/form-data
+// func FiledropHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+// 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+
+// 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+// 		utils.RespondWithError(w, http.StatusBadRequest, "content-type must be multipart")
+// 		return
+// 	}
+
+// 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+// 		utils.RespondWithError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
+// 		return
+// 	}
+
+// 	if r.MultipartForm == nil || len(r.MultipartForm.File) == 0 {
+// 		utils.RespondWithError(w, http.StatusBadRequest, "no files provided")
+// 		return
+// 	}
+
+// 	attachments, err := processUploadedFiles(r)
+// 	if err != nil {
+// 		utils.RespondWithError(w, http.StatusInternalServerError, err.Error())
+// 		return
+// 	}
+
+// 	writeJSON(w, http.StatusOK, attachments)
+// }
+
+// // processUploadedFiles handles all files in the multipart form
+// func processUploadedFiles(r *http.Request) ([]Attachment, error) {
+// 	var attachments []Attachment
+// 	postType := strings.ToLower(r.FormValue("postType"))
+
+// 	if postType == "" {
+// 		return nil, fmt.Errorf("missing postType")
+// 	}
+
+// 	for key, files := range r.MultipartForm.File {
+// 		keyLower := strings.ToLower(key)
+
+// 		for _, fh := range files {
+// 			att, err := processSingleFile(r, fh, keyLower, postType)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			attachments = append(attachments, att...)
 // 		}
 // 	}
-// 	// For all other keys, we ignore postType entirely
+
+// 	return attachments, nil
+// }
+
+// // processSingleFile handles individual file based on type
+// func processSingleFile(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
+// 	if key == "feed" && (postType == "video" || postType == "audio") {
+// 		return handleFeedMediaUpload(r, fh, key)
+// 	}
 // 	return handleRegularUpload(fh, key, postType)
 // }
 
