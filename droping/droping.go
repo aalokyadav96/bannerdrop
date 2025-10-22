@@ -3,12 +3,9 @@ package droping
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"mime"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strings"
 
 	"naevis/filedrop"
@@ -58,17 +55,17 @@ func FiledropHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 // processUploadedFiles handles all files in the multipart form
 func processUploadedFiles(r *http.Request) ([]Attachment, error) {
 	var attachments []Attachment
-	postType := strings.ToLower(r.FormValue("postType")) // now optional
+	postType := strings.ToLower(strings.TrimSpace(r.FormValue("postType"))) // optional, normalized
 
 	for key, files := range r.MultipartForm.File {
 		keyLower := strings.ToLower(key)
 
 		for _, fh := range files {
-			att, err := processSingleFile(r, fh, keyLower, postType)
+			atts, err := processSingleFile(r, fh, keyLower, postType)
 			if err != nil {
 				return nil, err
 			}
-			attachments = append(attachments, att...)
+			attachments = append(attachments, atts...)
 		}
 	}
 
@@ -77,46 +74,42 @@ func processUploadedFiles(r *http.Request) ([]Attachment, error) {
 
 // processSingleFile handles individual file based on type
 func processSingleFile(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
-	if key == "feed" && postType == "video" || postType == "audio" {
-		log.Println("I was here")
-		return handleFeedMediaUpload(r, fh, key)
+	// When key == "feed" we want special handling:
+	// - if postType is empty, default to "video"
+	// - if postType == "poster" treat as regular upload
+	// - if postType == "video" or "audio" use feed media upload
+	if key == "feed" {
+		if postType == "" {
+			postType = "video"
+			log.Printf("[Filedrop] postType missing for feed, defaulting to %q", postType)
+		}
+		pt := strings.ToLower(strings.TrimSpace(postType))
+		if pt == "poster" {
+			return handleRegularUpload(fh, key, pt)
+		}
+		if pt == "video" || pt == "audio" {
+			return handleFeedMediaUpload(r, fh, key, pt)
+		}
+		// fallthrough to regular handling for unexpected postTypes
+		return handleRegularUpload(fh, key, pt)
 	}
-	// For all other keys, we ignore postType entirely
+
+	// For all other keys, ignore postType entirely (but pass it along)
 	return handleRegularUpload(fh, key, postType)
 }
 
-// // processSingleFile handles individual file based on type
-// func processSingleFile(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
-// 	if key == "feed" {
-// 		// When key == feed, we still check postType (default to "video" if missing)
-// 		if postType == "" {
-// 			postType = "video"
-// 			log.Printf("[Filedrop] postType missing for feed, defaulting to %q", postType)
-// 		}
-// 		if postType == "poster" {
-// 			return handleRegularUpload(fh, key, postType)
-// 		}
-// 		if postType == "video" || postType == "audio" {
-// 			return handleFeedMediaUpload(r, fh, key)
-// 		}
-// 	}
-// 	// For all other keys, we ignore postType entirely
-// 	return handleRegularUpload(fh, key, postType)
-// }
-
 // handleFeedMediaUpload handles video/audio feed uploads
-func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key string) ([]Attachment, error) {
+func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
 	var attachments []Attachment
+
 	src, err := fh.Open()
 	if err != nil {
 		return nil, fmt.Errorf("cannot open file: %w", err)
 	}
-	defer src.Close()
+	// we don't need to keep src open after SaveUploadedFile (it will reopen internally if needed)
+	_ = src.Close()
 
-	header := make([]byte, 512)
-	n, _ := src.Read(header)
-	mtype := http.DetectContentType(header[:n])
-	_, picType := extensionFromContentType(mtype, key)
+	_, picType := extensionFromContentType(postType)
 
 	// Save the file
 	savedPath, uniqueID, extn, err := filedrop.SaveUploadedFile(fh, filemgr.EntityFeed, picType)
@@ -126,14 +119,14 @@ func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key string
 
 	uploadDir := filemgr.ResolvePath(filemgr.EntityFeed, picType)
 
-	// Process in background
+	// Process in background (non-blocking). It's fine to capture savedPath/uploadDir/uniqueID only.
 	go func(savedPath, uploadDir, uniqueID string) {
 		res, outPaths, err := filedrop.ProcessVideo(r, savedPath, uploadDir, uniqueID, filemgr.EntityFeed)
 		if err != nil {
-			log.Printf("[Feed] Video processing failed: %v", err)
+			log.Printf("[Feed] Video processing failed for %s: %v", uniqueID, err)
 			return
 		}
-		log.Printf("[Feed] Video processed successfully: resolutions=%v, paths=%v", res, outPaths)
+		log.Printf("[Feed] Video processed successfully for %s: resolutions=%v, paths=%v", uniqueID, res, outPaths)
 	}(savedPath, uploadDir, uniqueID)
 
 	attachments = append(attachments, Attachment{
@@ -149,13 +142,7 @@ func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key string
 func handleRegularUpload(fh *multipart.FileHeader, key, postType string) ([]Attachment, error) {
 	var attachments []Attachment
 
-	// Detect MIME type using file header and extension fallback
-	mtype, err := detectFileContentType(fh)
-	if err != nil {
-		return nil, fmt.Errorf("content type detection failed: %v", err)
-	}
-
-	// Reopen file for saving (detectFileContentType already closed it)
+	// Reopen file for saving
 	file, err := fh.Open()
 	if err != nil {
 		return nil, fmt.Errorf("cannot reopen file: %v", err)
@@ -163,9 +150,8 @@ func handleRegularUpload(fh *multipart.FileHeader, key, postType string) ([]Atta
 	defer file.Close()
 
 	log.Println("postType:", postType)
-	log.Println("mtype:", mtype)
 
-	_, picType := extensionFromContentType(mtype, postType)
+	_, picType := extensionFromContentType(postType)
 	log.Println("picType:", picType)
 
 	savedName, ext, err := filemgr.SaveFileForEntity(file, fh, filemgr.EntityType(key), picType)
@@ -182,87 +168,51 @@ func handleRegularUpload(fh *multipart.FileHeader, key, postType string) ([]Atta
 	return attachments, nil
 }
 
-func detectFileContentType(fh *multipart.FileHeader) (string, error) {
-	file, err := fh.Open()
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
+// func detectFileContentType(fh *multipart.FileHeader) (string, error) {
+// 	file, err := fh.Open()
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	defer file.Close()
 
-	header := make([]byte, 512)
-	n, _ := file.Read(header)
-	file.Seek(0, io.SeekStart)
+// 	header := make([]byte, 512)
+// 	n, _ := file.Read(header)
+// 	if seeker, ok := file.(io.Seeker); ok {
+// 		_, _ = seeker.Seek(0, io.SeekStart)
+// 	}
 
-	mtype := http.DetectContentType(header[:n])
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
+// 	mtype := http.DetectContentType(header[:n])
+// 	ext := strings.ToLower(filepath.Ext(fh.Filename))
 
-	// Get MIME from extension
-	extType := mime.TypeByExtension(ext)
+// 	// Get MIME from extension
+// 	extType := mime.TypeByExtension(ext)
 
-	// Use extension-based type if:
-	// - DetectContentType misclassifies audio as video
-	// - or MIME type is too generic (application/octet-stream)
-	if strings.HasPrefix(mtype, "video/") && strings.HasPrefix(extType, "audio/") {
-		mtype = extType
-	} else if mtype == "application/octet-stream" && extType != "" {
-		mtype = extType
-	}
+// 	// Use extension-based type if:
+// 	// - DetectContentType misclassifies audio as video
+// 	// - or MIME type is too generic (application/octet-stream)
+// 	if strings.HasPrefix(mtype, "video/") && strings.HasPrefix(extType, "audio/") {
+// 		mtype = extType
+// 	} else if mtype == "application/octet-stream" && extType != "" {
+// 		mtype = extType
+// 	}
 
-	return mtype, nil
-}
+// 	return mtype, nil
+// }
 
-// extensionFromContentType maps mime types to extensions and PictureType
-func extensionFromContentType(ct, postType string) (string, filemgr.PictureType) {
-	log.Println("ct", ct, "postType", postType)
-	ct = strings.ToLower(ct)
-	postType = strings.ToLower(postType)
+// extensionFromContentType maps mime types / postType strings to extensions and PictureType
+func extensionFromContentType(postType string) (string, filemgr.PictureType) {
+	log.Println("postType", postType)
+	postType = strings.ToLower(strings.TrimSpace(postType))
 
 	switch postType {
+	case "audio":
+		return "", filemgr.PicAudio
+	case "video":
+		return "", filemgr.PicVideo
 	case "poster":
-		switch ct {
-		case "image/jpeg", "image/jpg":
-			return ".jpg", filemgr.PicPoster
-		case "image/png":
-			return ".png", filemgr.PicPoster
-		default:
-			return ".jpg", filemgr.PicPoster
-		}
+		return "", filemgr.PicPoster
 	}
-
-	if strings.HasPrefix(ct, "image/") {
-		switch ct {
-		case "image/jpeg", "image/jpg":
-			return ".jpg", filemgr.PicPhoto
-		case "image/png":
-			return ".png", filemgr.PicPhoto
-		default:
-			return ".jpg", filemgr.PicPhoto
-		}
-	}
-
-	if strings.HasPrefix(ct, "video/") {
-		switch ct {
-		case "video/mp4":
-			return ".mp4", filemgr.PicVideo
-		case "video/webm":
-			return ".webm", filemgr.PicVideo
-		default:
-			return ".mp4", filemgr.PicVideo
-		}
-	}
-
-	if postType == "audio" || strings.HasPrefix(ct, "audio/") {
-		switch ct {
-		case "audio/mp3":
-			return ".mp3", filemgr.PicAudio
-		case "audio/aac":
-			return ".aac", filemgr.PicAudio
-		default:
-			return ".m4a", filemgr.PicAudio
-		}
-	}
-
-	return ".bin", filemgr.PicPhoto
+	return "", filemgr.PicPhoto
 }
 
 // writeJSON writes JSON response
