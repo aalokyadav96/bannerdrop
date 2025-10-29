@@ -8,8 +8,8 @@ import (
 	"io"
 	"log"
 	"naevis/db"
-	"naevis/middleware"
 	"naevis/models"
+	"naevis/utils"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -250,12 +250,6 @@ func parseVTT(filePath string) ([]Subtitle, error) {
 // UploadSubtitle lets post authors upload a VTT file for their video posts
 func UploadSubtitle(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
-	token := r.Header.Get("Authorization")
-	claims, err := middleware.ValidateJWT(token)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	postID := ps.ByName("postid")
 	lang := ps.ByName("lang") // now comes from URL
@@ -272,7 +266,7 @@ func UploadSubtitle(w http.ResponseWriter, r *http.Request, ps httprouter.Params
 	}
 
 	// Only author can upload subtitles
-	if post.UserID != claims.UserID {
+	if post.UserID != utils.GetUserIDFromRequest(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
