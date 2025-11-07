@@ -34,15 +34,3 @@ func saveUploadedVideoFile(r *http.Request, formKey string, entitytype filemgr.E
 func saveUploadedAudioFile(r *http.Request, formKey string, entitytype filemgr.EntityType) (*MediaResult, error) {
 	return ProcessMediaUpload(r, formKey, Audio, entitytype)
 }
-
-// func HandleMediaUpload(r *http.Request, postType string, entitytype filemgr.EntityType) (paths, names []string, resolutions []int, err error) {
-// 	switch postType {
-// 	case "image":
-// 		names, err = saveUploadedFiles(r, "images", "photo", entitytype)
-// 	case "video":
-// 		resolutions, paths, names, err = saveUploadedVideoFile(r, "video", entitytype)
-// 	case "audio":
-// 		resolutions, paths, names, err = saveUploadedAudioFile(r, "audio", entitytype)
-// 	}
-// 	return
-// }

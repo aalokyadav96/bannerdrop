@@ -6,6 +6,7 @@ import (
 	"naevis/feedproxy"
 	"naevis/filedrop"
 	"naevis/filemgr"
+	"naevis/mediaproxy"
 	"naevis/middleware"
 	"naevis/posts"
 	"naevis/ratelim"
@@ -15,7 +16,12 @@ import (
 )
 
 func AddStaticRoutes(router *httprouter.Router) {
+	// mediaproxy.InitMediaProxy()
 	router.ServeFiles("/static/uploads/*filepath", http.Dir("static/uploads"))
+
+	router.GET("/static/proxy/*url", mediaproxy.ProxyHandler)
+	// router.GET("/external/:hash/*rest", mediaproxy.ProxyHandler)
+
 }
 
 func AddFiledropRoutes(router *httprouter.Router, rateLimiter *ratelim.RateLimiter) {

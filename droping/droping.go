@@ -106,7 +106,6 @@ func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key, postT
 	if err != nil {
 		return nil, fmt.Errorf("cannot open file: %w", err)
 	}
-	// we don't need to keep src open after SaveUploadedFile (it will reopen internally if needed)
 	_ = src.Close()
 
 	_, picType := extensionFromContentType(postType)
@@ -119,20 +118,19 @@ func handleFeedMediaUpload(r *http.Request, fh *multipart.FileHeader, key, postT
 
 	uploadDir := filemgr.ResolvePath(filemgr.EntityFeed, picType)
 
-	// Process in background (non-blocking). It's fine to capture savedPath/uploadDir/uniqueID only.
-	go func(savedPath, uploadDir, uniqueID string) {
-		res, outPaths, err := filedrop.ProcessVideo(r, savedPath, uploadDir, uniqueID, filemgr.EntityFeed)
-		if err != nil {
-			log.Printf("[Feed] Video processing failed for %s: %v", uniqueID, err)
-			return
-		}
-		log.Printf("[Feed] Video processed successfully for %s: resolutions=%v, paths=%v", uniqueID, res, outPaths)
-	}(savedPath, uploadDir, uniqueID)
+	// Process video synchronously so we can include resolutions
+	res, outPaths, err := filedrop.ProcessVideo(r, savedPath, uploadDir, uniqueID, filemgr.EntityFeed)
+	if err != nil {
+		log.Printf("[Feed] Video processing failed for %s: %v", uniqueID, err)
+		return nil, fmt.Errorf("video processing failed: %w", err)
+	}
+	log.Printf("[Feed] Video processed successfully for %s: resolutions=%v, paths=%v", uniqueID, res, outPaths)
 
 	attachments = append(attachments, Attachment{
-		Filename: uniqueID,
-		Extn:     extn,
-		Key:      key,
+		Filename:    uniqueID,
+		Extn:        extn,
+		Key:         key,
+		Resolutions: res,
 	})
 
 	return attachments, nil
@@ -167,37 +165,6 @@ func handleRegularUpload(fh *multipart.FileHeader, key, postType string) ([]Atta
 
 	return attachments, nil
 }
-
-// func detectFileContentType(fh *multipart.FileHeader) (string, error) {
-// 	file, err := fh.Open()
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	defer file.Close()
-
-// 	header := make([]byte, 512)
-// 	n, _ := file.Read(header)
-// 	if seeker, ok := file.(io.Seeker); ok {
-// 		_, _ = seeker.Seek(0, io.SeekStart)
-// 	}
-
-// 	mtype := http.DetectContentType(header[:n])
-// 	ext := strings.ToLower(filepath.Ext(fh.Filename))
-
-// 	// Get MIME from extension
-// 	extType := mime.TypeByExtension(ext)
-
-// 	// Use extension-based type if:
-// 	// - DetectContentType misclassifies audio as video
-// 	// - or MIME type is too generic (application/octet-stream)
-// 	if strings.HasPrefix(mtype, "video/") && strings.HasPrefix(extType, "audio/") {
-// 		mtype = extType
-// 	} else if mtype == "application/octet-stream" && extType != "" {
-// 		mtype = extType
-// 	}
-
-// 	return mtype, nil
-// }
 
 // extensionFromContentType maps mime types / postType strings to extensions and PictureType
 func extensionFromContentType(postType string) (string, filemgr.PictureType) {
