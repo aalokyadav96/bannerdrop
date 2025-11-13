@@ -25,7 +25,7 @@ func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	fmt.Fprint(w, "200")
 }
 
-// setupRouter builds the router with all routes (API + static).
+// setupRouter builds the router with all API and static routes.
 func setupRouter(rateLimiter *ratelim.RateLimiter) *httprouter.Router {
 	router := httprouter.New()
 	router.GET("/health", Index)
@@ -33,13 +33,13 @@ func setupRouter(rateLimiter *ratelim.RateLimiter) *httprouter.Router {
 	// API routes
 	routes.AddFiledropRoutes(router, rateLimiter)
 
-	// Static file routes
+	// Static routes
 	routes.AddStaticRoutes(router)
 
 	return router
 }
 
-// parseAllowedOrigins parses comma-separated origins from env.
+// parseAllowedOrigins parses comma-separated origins from environment variable.
 func parseAllowedOrigins(env string) []string {
 	if env == "" {
 		return []string{
@@ -59,12 +59,12 @@ func parseAllowedOrigins(env string) []string {
 }
 
 func main() {
-	// Load environment variables if .env exists
+	// Load environment variables from .env if exists
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found; using system environment")
 	}
 
-	// Determine server port
+	// Determine port
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = ":6925"
@@ -72,42 +72,49 @@ func main() {
 		port = ":" + port
 	}
 
-	// Parse allowed origins for CORS
+	// Parse allowed origins
 	allowedOrigins := parseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
 
 	// Initialize rate limiter
 	rateLimiter := ratelim.NewRateLimiter(1, 6, 10*time.Minute, 10000)
 
-	// Build router with all routes (API + static)
+	// Build router with API + static routes
 	router := setupRouter(rateLimiter)
 
-	// Apply middleware
-	handler := middleware.LoggingMiddleware(middleware.SecurityHeaders(router))
+	// Middleware chain: SecurityHeaders → Logging → Router
+	innerHandler := middleware.LoggingMiddleware(middleware.SecurityHeaders(router))
 
-	// Apply CORS (outermost)
+	// CORS applied outermost
 	corsHandler := cors.New(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"HEAD", "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization", "Idempotency-Key", "X-Requested-With"},
 		AllowCredentials: false,
-	}).Handler(handler)
+	}).Handler(innerHandler)
 
-	// Create unified HTTP server
+	// Multiplexer: /health bypasses CORS
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "200")
+	})
+	mux.Handle("/", corsHandler)
+
+	// Configure HTTP server
 	server := &http.Server{
 		Addr:              port,
-		Handler:           corsHandler,
+		Handler:           mux,
 		ReadTimeout:       7 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 
-	// Graceful shutdown handler
+	// Graceful shutdown registration
 	server.RegisterOnShutdown(func() {
 		log.Println("🛑 Server shutting down...")
 	})
 
-	// Start unified server
+	// Start server
 	go func() {
 		log.Printf("🚀 Server running on %s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -115,11 +122,12 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Wait for interrupt or SIGTERM
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
 
+	// Begin graceful shutdown
 	log.Println("🛑 Shutdown signal received; stopping gracefully...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
